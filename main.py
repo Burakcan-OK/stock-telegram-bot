@@ -369,6 +369,7 @@ def create_price_checker(monitored_dict):
 # MAIN
 # -----------------------------
 def main():
+    # --- ANALIZI SADECE BIR KEZ YAP ---
     try:
         combined_df, monitored, top_dict = analyze_once()
     except Exception as e:
@@ -383,29 +384,29 @@ def main():
     print(f"\nİzlenen sembol sayısı: {len(monitored_valid)}")
     checker = create_price_checker(monitored_valid)
 
-    # run initial check immediately
+    # İlk kontrolü çalıştır
     checker()
 
-    # schedule periodic checks
+    # Periodik kontrolü schedule et
     schedule.every(CHECK_INTERVAL_MINUTES).minutes.do(checker)
-    print(f"İzleme başladı — her {CHECK_INTERVAL_MINUTES} dakikada bir kontrol edilecek. (USE_MARKET_HOURS={USE_MARKET_HOURS})")
+    print(f"İzleme başladı — her {CHECK_INTERVAL_MINUTES} dakikada bir kontrol edilecek.")
 
     try:
         while True:
             tz = pytz.timezone(MARKET_TZ)
             now = datetime.now(tz)
 
-            # --- MANUEL DURDURMA: RUNNING flag ---
+            # --- MANUEL DURDURMA ---
             RUNNING = os.getenv("RUNNING", "true").lower() == "true"
             if not RUNNING:
-                print(f"⏸ RUNNING=False olarak ayarlandı ({now.strftime('%H:%M:%S')}). Döngü duruyor...")
-                time.sleep(60)  # 1 dakika bekle, sonra tekrar kontrol et
+                print(f"⏸ RUNNING=False, fiyat kontrolü durduruldu ({now.strftime('%H:%M:%S')})")
+                time.sleep(60)
                 continue
 
-            # --- MARKET HOURS kontrolü ---
+            # --- MARKET HOURS KONTROLÜ ---
             if USE_MARKET_HOURS and not (MARKET_OPEN <= now.time() <= MARKET_CLOSE):
-                print(f"⏸ Market saatleri dışında ({now.strftime('%H:%M:%S')}). Kontrol bekleniyor...")
-                time.sleep(60)  # 1 dakika bekle, sonra tekrar kontrol et
+                print(f"⏸ Market saatleri dışında ({now.strftime('%H:%M:%S')})")
+                time.sleep(60)
                 continue
 
             schedule.run_pending()
