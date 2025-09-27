@@ -375,7 +375,6 @@ def main():
         print("Analiz sırasında hata:", e)
         return
 
-    # monitored only with baseline price available
     monitored_valid = {s: m for s, m in monitored.items() if m.get("baseline_price") is not None}
     if not monitored_valid:
         print("Geçerli baseline fiyatı olan izlenecek sembol yok. Program sonlanıyor.")
@@ -396,7 +395,14 @@ def main():
             tz = pytz.timezone(MARKET_TZ)
             now = datetime.now(tz)
 
-            # Market saatleri kontrolü
+            # --- MANUEL DURDURMA: RUNNING flag ---
+            RUNNING = os.getenv("RUNNING", "true").lower() == "true"
+            if not RUNNING:
+                print(f"⏸ RUNNING=False olarak ayarlandı ({now.strftime('%H:%M:%S')}). Döngü duruyor...")
+                time.sleep(60)  # 1 dakika bekle, sonra tekrar kontrol et
+                continue
+
+            # --- MARKET HOURS kontrolü ---
             if USE_MARKET_HOURS and not (MARKET_OPEN <= now.time() <= MARKET_CLOSE):
                 print(f"⏸ Market saatleri dışında ({now.strftime('%H:%M:%S')}). Kontrol bekleniyor...")
                 time.sleep(60)  # 1 dakika bekle, sonra tekrar kontrol et
@@ -409,8 +415,6 @@ def main():
         print("Program manuel olarak durduruldu.")
     except Exception as e:
         print("Ana döngüde hata:", e)
-
-
 
 if __name__ == "__main__":
     main()
