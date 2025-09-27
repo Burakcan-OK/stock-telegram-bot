@@ -24,8 +24,8 @@ MOVEMENT_NOTIFY_UP = float(os.environ.get("MOVEMENT_NOTIFY_UP", 2.5))
 CHECK_INTERVAL_MINUTES = int(os.environ.get("CHECK_INTERVAL_MINUTES", 1))
 
 # Borsa saatleri opsiyonu: True => sadece MARKET_OPEN..MARKET_CLOSE arasında kontrol yap
-#USE_MARKET_HOURS = os.environ.get("USE_MARKET_HOURS", "True").lower() in ("1", "true", "yes")
-USE_MARKET_HOURS = False
+USE_MARKET_HOURS = os.environ.get("USE_MARKET_HOURS", "True").lower() in ("1", "true", "yes")
+#USE_MARKET_HOURS = False
 # Market timezone ve saatler (BIST örneği — istersen değiştir)
 MARKET_TZ = os.environ.get("MARKET_TZ", "Europe/Istanbul")
 MARKET_OPEN_HH = int(os.environ.get("MARKET_OPEN_HH", 9))
@@ -384,7 +384,7 @@ def main():
     print(f"\nİzlenen sembol sayısı: {len(monitored_valid)}")
     checker = create_price_checker(monitored_valid)
 
-    # run initial check immediately (isteğe göre yorumlayabilirsin)
+    # run initial check immediately
     checker()
 
     # schedule periodic checks
@@ -393,12 +393,23 @@ def main():
 
     try:
         while True:
+            tz = pytz.timezone(MARKET_TZ)
+            now = datetime.now(tz)
+
+            # Market saatleri kontrolü
+            if USE_MARKET_HOURS and not (MARKET_OPEN <= now.time() <= MARKET_CLOSE):
+                print(f"⏸ Market saatleri dışında ({now.strftime('%H:%M:%S')}). Kontrol bekleniyor...")
+                time.sleep(60)  # 1 dakika bekle, sonra tekrar kontrol et
+                continue
+
             schedule.run_pending()
             time.sleep(1)
+
     except KeyboardInterrupt:
         print("Program manuel olarak durduruldu.")
     except Exception as e:
         print("Ana döngüde hata:", e)
+
 
 
 if __name__ == "__main__":
