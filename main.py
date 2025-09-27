@@ -371,43 +371,45 @@ def create_price_checker(monitored_dict):
 def main():
     tz = pytz.timezone(MARKET_TZ)
 
-    # program çalışırken sürekli flag kontrolü
-    first_run_done = False
-    monitored_valid = {}
-    checker = None
+    # --- RUNNING flag başlangıçta kontrol ---
+    RUNNING = os.getenv("RUNNING", "true").lower() in ("1", "true", "yes")
+
+    if RUNNING:
+        # ANALIZ ve INITIAL CHECKER
+        combined_df, monitored, top_dict = analyze_once()
+        monitored_valid = {s: m for s, m in monitored.items() if m.get("baseline_price") is not None}
+
+        if monitored_valid:
+            checker = create_price_checker(monitored_valid)
+            checker()  # ilk kontrol ve mesaj gönderimi
+
+            # scheduler'a ekle
+            schedule.every(CHECK_INTERVAL_MINUTES).minutes.do(checker)
+            print(f"✅ RUNNING=True, izleme başladı. Her {CHECK_INTERVAL_MINUTES} dakikada bir kontrol edilecek.")
+        else:
+            print("Geçerli baseline fiyatı olan izlenecek sembol yok. Program beklemeye alındı.")
+            checker = None
+    else:
+        print("⏸ RUNNING=False, analiz ve mesaj gönderimi atlandı.")
+        checker = None
+        monitored_valid = {}
 
     try:
         while True:
+            # --- MARKET HOURS kontrolü ---
             now = datetime.now(tz)
-
-            # MANUEL DURDURMA
-            RUNNING = os.getenv("RUNNING", "true").lower() == "true"
-
-            if not RUNNING:
-                print(f"⏸ RUNNING=False, kontrol durduruldu ({now.strftime('%H:%M:%S')})")
-                time.sleep(60)
-                continue
-
-            # MARKET HOURS kontrolü
             if USE_MARKET_HOURS and not (MARKET_OPEN <= now.time() <= MARKET_CLOSE):
                 print(f"⏸ Market saatleri dışında ({now.strftime('%H:%M:%S')})")
                 time.sleep(60)
                 continue
 
-            # --- ANALIZ VE CHECKER SADECE ILK RUNNING=true DURUMUNDA ---
-            if not first_run_done:
-                combined_df, monitored, top_dict = analyze_once()
-                monitored_valid = {s: m for s, m in monitored.items() if m.get("baseline_price") is not None}
-                if not monitored_valid:
-                    print("Geçerli baseline fiyatı olan izlenecek sembol yok. Program beklemeye alındı.")
-                    time.sleep(60)
-                    continue
-                checker = create_price_checker(monitored_valid)
-                checker()  # ilk kontrol
-                schedule.every(CHECK_INTERVAL_MINUTES).minutes.do(checker)
-                first_run_done = True
-                print(f"İzleme başladı — her {CHECK_INTERVAL_MINUTES} dakikada bir kontrol edilecek.")
+            # --- RUNNING=false ise sadece bekle ---
+            RUNNING = os.getenv("RUNNING", "true").lower() in ("1", "true", "yes")
+            if not RUNNING or checker is None:
+                time.sleep(60)
+                continue
 
+            # periyodik kontrol
             schedule.run_pending()
             time.sleep(1)
 
@@ -415,7 +417,6 @@ def main():
         print("Program manuel olarak durduruldu.")
     except Exception as e:
         print("Ana döngüde hata:", e)
-
 
 if __name__ == "__main__":
     main()
