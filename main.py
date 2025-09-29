@@ -8,6 +8,7 @@ import yfinance as yf
 import requests
 import schedule
 import pytz
+import pandas_market_calendars as mcal
 
 # -----------------------------
 # CONFIG
@@ -18,22 +19,34 @@ CHAT_ID = os.environ.get("CHAT_ID", "5382853959")
 
 # Hareket bildirimi eşiği (örnek: 1.0 => %1)
 MOVEMENT_NOTIFY_DWN = float(os.environ.get("MOVEMENT_NOTIFY_DWN", 1))
-MOVEMENT_NOTIFY_UP = float(os.environ.get("MOVEMENT_NOTIFY_UP", 2.5))
+MOVEMENT_NOTIFY_UP = float(os.environ.get("MOVEMENT_NOTIFY_UP", 3))
 
 # Periyodik kontrol aralığı (dakika)
-CHECK_INTERVAL_MINUTES = int(os.environ.get("CHECK_INTERVAL_MINUTES", 1))
+CHECK_INTERVAL_MINUTES = int(os.environ.get("CHECK_INTERVAL_MINUTES", 5))
 
 # Borsa saatleri opsiyonu: True => sadece MARKET_OPEN..MARKET_CLOSE arasında kontrol yap
 USE_MARKET_HOURS = os.environ.get("USE_MARKET_HOURS", "True").lower() in ("1", "true", "yes")
 #USE_MARKET_HOURS = False
 # Market timezone ve saatler (BIST örneği — istersen değiştir)
 MARKET_TZ = os.environ.get("MARKET_TZ", "Europe/Istanbul")
-MARKET_OPEN_HH = int(os.environ.get("MARKET_OPEN_HH", 9))
-MARKET_OPEN_MM = int(os.environ.get("MARKET_OPEN_MM", 40))
+MARKET_OPEN_HH = int(os.environ.get("MARKET_OPEN_HH", 10))
+MARKET_OPEN_MM = int(os.environ.get("MARKET_OPEN_MM", 00))
 MARKET_CLOSE_HH = int(os.environ.get("MARKET_CLOSE_HH", 18))
-MARKET_CLOSE_MM = int(os.environ.get("MARKET_CLOSE_MM", 10))
+MARKET_CLOSE_MM = int(os.environ.get("MARKET_CLOSE_MM", 00))
 MARKET_OPEN = dtime(hour=MARKET_OPEN_HH, minute=MARKET_OPEN_MM)
 MARKET_CLOSE = dtime(hour=MARKET_CLOSE_HH, minute=MARKET_CLOSE_MM)
+# BIST (Borsa İstanbul) takvimi
+bist = mcal.get_calendar("XIST")
+
+def is_bist_open_now(now):
+    """BIST için resmi tatil + hafta sonu + saat kontrolü"""
+    # Bugün için takvim
+    schedule = bist.schedule(start_date=now.date(), end_date=now.date())
+    if schedule.empty:
+        return False  # tatil veya hafta sonu
+
+    # Senin config'te verdiğin saat aralığına bak
+    return MARKET_OPEN <= now.time() <= MARKET_CLOSE
 
 # Kaç top listesi isteriz? (her model için top N)
 TOP_N = int(os.environ.get("TOP_N", 5))
@@ -298,11 +311,10 @@ def create_price_checker(monitored_dict):
         now = datetime.now(tz)
         print(f"\n[{now.strftime('%Y-%m-%d %H:%M:%S %Z')}] Fiyat kontrolü başlıyor...")
 
-        # Borsa saatleri kontrolü
-        if USE_MARKET_HOURS:
-            if not (MARKET_OPEN <= now.time() <= MARKET_CLOSE):
-                print("⏸ Market saatleri dışında. Kontrol atlandı.")
-                return
+        # Borsa açık mı? (saat + hafta sonu + resmi tatil kontrolü)
+        if USE_MARKET_HOURS and not is_bist_open_now(now):
+            print("⏸ Market kapalı (hafta sonu / tatil / saat dışında). Kontrol atlandı.")
+            return
 
         for sym, meta in monitored_dict.items():
             latest = safe_get_last_price(sym)
@@ -402,12 +414,13 @@ def main():
 
     try:
         while True:
+            tz = pytz.timezone(MARKET_TZ)
             now = datetime.now(tz)
 
-            # MARKET HOURS kontrolü
-            if USE_MARKET_HOURS and not (MARKET_OPEN <= now.time() <= MARKET_CLOSE):
-                print(f"⏸ Market saatleri dışında ({now.strftime('%H:%M:%S')})")
-                time.sleep(60)
+            # Market saatleri kontrolü
+            if USE_MARKET_HOURS and not is_bist_open_now(now):
+                print(f"⏸ Market kapalı ({now.strftime('%Y-%m-%d %H:%M:%S')})")
+                time.sleep(60)  # 1 dk bekle ve tekrar kontrol et
                 continue
 
             # RUNNING kontrolü

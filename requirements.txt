@@ -4,3 +4,4 @@ yfinance
 requests
 schedule
 pytz
+pandas-market-calendars
