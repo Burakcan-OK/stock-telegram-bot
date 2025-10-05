@@ -9,20 +9,21 @@ import requests
 import schedule
 import pytz
 import pandas_market_calendars as mcal
-
+from dotenv import load_dotenv
 # -----------------------------
 # CONFIG
 # -----------------------------
+load_dotenv()
 # Telegram (ortam değişkeni veya doğrudan buraya koyabilirsin)
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "8063930487:AAENeimw2WCdHupGCQ-o65YK4u0KXP9Q4lk")
-CHAT_ID = os.environ.get("CHAT_ID", "5382853959")
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", )
+CHAT_ID = os.getenv("CHAT_ID", )
 
 # Hareket bildirimi eşiği (örnek: 1.0 => %1)
 MOVEMENT_NOTIFY_DWN = float(os.environ.get("MOVEMENT_NOTIFY_DWN", 1))
-MOVEMENT_NOTIFY_UP = float(os.environ.get("MOVEMENT_NOTIFY_UP", 3))
+MOVEMENT_NOTIFY_UP = float(os.environ.get("MOVEMENT_NOTIFY_UP", 2.5))
 
 # Periyodik kontrol aralığı (dakika)
-CHECK_INTERVAL_MINUTES = int(os.environ.get("CHECK_INTERVAL_MINUTES", 5))
+CHECK_INTERVAL_MINUTES = int(os.environ.get("CHECK_INTERVAL_MINUTES", 1))
 
 # Borsa saatleri opsiyonu: True => sadece MARKET_OPEN..MARKET_CLOSE arasında kontrol yap
 USE_MARKET_HOURS = os.environ.get("USE_MARKET_HOURS", "True").lower() in ("1", "true", "yes")
@@ -35,7 +36,6 @@ MARKET_CLOSE_HH = int(os.environ.get("MARKET_CLOSE_HH", 18))
 MARKET_CLOSE_MM = int(os.environ.get("MARKET_CLOSE_MM", 00))
 MARKET_OPEN = dtime(hour=MARKET_OPEN_HH, minute=MARKET_OPEN_MM)
 MARKET_CLOSE = dtime(hour=MARKET_CLOSE_HH, minute=MARKET_CLOSE_MM)
-# BIST (Borsa İstanbul) takvimi
 bist = mcal.get_calendar("XIST")
 
 def is_bist_open_now(now):
@@ -69,6 +69,7 @@ print("--------------------------------------------------\n")
 # -----------------------------
 # UTIL: Telegram & price fetch
 # -----------------------------
+load_dotenv()
 def send_telegram_message(text: str):
     """Kısa ve güvenli Telegram gönderimi."""
     if not TELEGRAM_TOKEN or TELEGRAM_TOKEN.startswith("YOUR_"):
@@ -381,65 +382,55 @@ def create_price_checker(monitored_dict):
 # MAIN
 # -----------------------------
 def main():
-    tz = pytz.timezone(MARKET_TZ)
+    try:
+        combined_df, monitored, top_dict = analyze_once()
+    except Exception as e:
+        print("Analiz sırasında hata:", e)
+        return
 
-    # --- monitored global / persistent ---
-    monitored_valid = {}
-    checker = None
-    combined_df = None
-    top_dict = None
+    # monitored only with baseline price available
+    monitored_valid = {s: m for s, m in monitored.items() if m.get("baseline_price") is not None}
+    if not monitored_valid:
+        print("Geçerli baseline fiyatı olan izlenecek sembol yok. Program sonlanıyor.")
+        return
 
-    # RUNNING flag kontrolü
-    def is_running():
-        return os.getenv("RUNNING", "true").lower() in ("1", "true", "yes")
+    print(f"\nİzlenen sembol sayısı: {len(monitored_valid)}")
+    checker = create_price_checker(monitored_valid)
 
-    # ANALİZ / monitored setup (sadece monitored boşsa veya manuel JSON güncellemesi yapılırsa)
-    def setup_monitored():
-        nonlocal combined_df, monitored_valid, top_dict, checker
-        try:
-            combined_df, monitored, top_dict = analyze_once()
-            monitored_valid = {s: m for s, m in monitored.items() if m.get("baseline_price") is not None}
-            if monitored_valid:
-                checker = create_price_checker(monitored_valid)
-                print(f"✅ Monitored setup tamamlandı. İzlenecek sembol sayısı: {len(monitored_valid)}")
-            else:
-                checker = None
-                print("⚠ Geçerli baseline fiyatı olan izlenecek sembol yok.")
-        except Exception as e:
-            print("[ERROR] Monitored setup hatası:", e)
-            checker = None
+    # run initial check immediately
+    checker()
 
-    # Başlangıçta monitored oluştur
-    setup_monitored()
+    # schedule periodic checks
+    schedule.every(CHECK_INTERVAL_MINUTES).minutes.do(checker)
+    print(f"İzleme başladı — her {CHECK_INTERVAL_MINUTES} dakikada bir kontrol edilecek. (USE_MARKET_HOURS={USE_MARKET_HOURS})")
 
     try:
         while True:
             tz = pytz.timezone(MARKET_TZ)
             now = datetime.now(tz)
 
-            # Market saatleri kontrolü
-            if USE_MARKET_HOURS and not is_bist_open_now(now):
-                print(f"⏸ Market kapalı ({now.strftime('%Y-%m-%d %H:%M:%S')})")
-                time.sleep(60)  # 1 dk bekle ve tekrar kontrol et
-                continue
+            # Market saatleri + borsa açık mı kontrolü
+            if USE_MARKET_HOURS:
+                # Eğer Borsa İstanbul şu anda kapalıysa (hafta sonu, tatil, ya da saat dışında)
+                if not is_bist_open_now(now):
+                    print("⏸ Borsa İstanbul şu anda kapalı (hafta sonu / tatil / saat dışında). Kontrol atlanıyor...")
+                    time.sleep(60)  # 1 dakika bekle, sonra tekrar dene
+                    return
 
-            # RUNNING kontrolü
-            if not is_running() or checker is None:
-                # false ise bekle
-                time.sleep(60)
-                continue
-
-            # RUNNING=True ise kontrolü çalıştır
+                # Eğer tanımlı market saatleri dışında çalışıyorsa
+                elif not (MARKET_OPEN <= now.time() <= MARKET_CLOSE):
+                    print(f"⏸ Market saatleri dışında ({now.strftime('%H:%M:%S')}). Kontrol beklemeye alındı...")
+                    time.sleep(60)
+                    return
             schedule.run_pending()
-            checker()  # fiyatları kontrol et ve gerekli mesajları gönder
-
-            # CHECK_INTERVAL beklemesi
-            time.sleep(CHECK_INTERVAL_MINUTES * 60)
+            time.sleep(1)
 
     except KeyboardInterrupt:
         print("Program manuel olarak durduruldu.")
     except Exception as e:
         print("Ana döngüde hata:", e)
+
+
 
 if __name__ == "__main__":
     main()
