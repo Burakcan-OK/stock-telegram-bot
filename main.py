@@ -388,7 +388,6 @@ def main():
         print("Analiz sırasında hata:", e)
         return
 
-    # monitored only with baseline price available
     monitored_valid = {s: m for s, m in monitored.items() if m.get("baseline_price") is not None}
     if not monitored_valid:
         print("Geçerli baseline fiyatı olan izlenecek sembol yok. Program sonlanıyor.")
@@ -397,40 +396,50 @@ def main():
     print(f"\nİzlenen sembol sayısı: {len(monitored_valid)}")
     checker = create_price_checker(monitored_valid)
 
-    # run initial check immediately
-    checker()
+    # güvenli wrapper: market saatleri kontrolünü burada yapıyoruz,
+    # böylece schedule tarafından çağrılsa bile wrapper içindeki kontroller devrede olur.
+    def checker_wrapper():
+        tz = pytz.timezone(MARKET_TZ)
+        now = datetime.now(tz)
 
-    # schedule periodic checks
-    schedule.every(CHECK_INTERVAL_MINUTES).minutes.do(checker)
-    print(f"İzleme başladı — her {CHECK_INTERVAL_MINUTES} dakikada bir kontrol edilecek. (USE_MARKET_HOURS={USE_MARKET_HOURS})")
+        if USE_MARKET_HOURS:
+            # tatil / hafta sonu kontrolü
+            if not is_bist_open_now(now):
+                print(f"[{now.strftime('%Y-%m-%d %H:%M:%S %z')}] ⏸ Borsa kapalı (hafta sonu/tatil). Kontrol atlandı.")
+                return
+
+            # günlük market saatleri kontrolü (MARKET_OPEN, MARKET_CLOSE dtime objesi olmalı)
+            if not (MARKET_OPEN <= now.time() <= MARKET_CLOSE):
+                print(f"[{now.strftime('%Y-%m-%d %H:%M:%S %z')}] ⏸ Market saatleri dışında ({now.strftime('%H:%M:%S')}). Kontrol atlandı.")
+                return
+
+        print(f"[{now.strftime('%Y-%m-%d %H:%M:%S %z')}] Fiyat kontrolü başlıyor...")
+        try:
+            checker()
+        except Exception as e:
+            print(f"[{now.strftime('%Y-%m-%d %H:%M:%S %z')}] Checker hatası:", e)
+
+    # schedule job (CHECK_INTERVAL_MINUTES'in int olduğundan emin ol)
+    interval = int(CHECK_INTERVAL_MINUTES)
+    schedule.every(interval).minutes.do(checker_wrapper)
+    print(f"İzleme başladı — her {interval} dakikada bir kontrol edilecek. (USE_MARKET_HOURS={USE_MARKET_HOURS})")
+
+    # İlk kontrolü yalnızca market açıksa çalıştır (veya USE_MARKET_HOURS False ise her zaman)
+    tz = pytz.timezone(MARKET_TZ)
+    now = datetime.now(tz)
+    if (not USE_MARKET_HOURS) or (is_bist_open_now(now) and MARKET_OPEN <= now.time() <= MARKET_CLOSE):
+        checker_wrapper()
+    else:
+        print(f"[{now.strftime('%Y-%m-%d %H:%M:%S %z')}] İlk kontrol atlandı (market kapalı).")
 
     try:
         while True:
-            tz = pytz.timezone(MARKET_TZ)
-            now = datetime.now(tz)
-
-            # Market saatleri + borsa açık mı kontrolü
-            if USE_MARKET_HOURS:
-                # Eğer Borsa İstanbul şu anda kapalıysa (hafta sonu, tatil, ya da saat dışında)
-                if not is_bist_open_now(now):
-                    print("⏸ Borsa İstanbul şu anda kapalı (hafta sonu / tatil / saat dışında). Kontrol atlanıyor...")
-                    time.sleep(60)  # 1 dakika bekle, sonra tekrar dene
-                    return
-
-                # Eğer tanımlı market saatleri dışında çalışıyorsa
-                elif not (MARKET_OPEN <= now.time() <= MARKET_CLOSE):
-                    print(f"⏸ Market saatleri dışında ({now.strftime('%H:%M:%S')}). Kontrol beklemeye alındı...")
-                    time.sleep(60)
-                    return
             schedule.run_pending()
-            time.sleep(1)
-
+            time.sleep(1)  # hafif uyku; CPU kullanımı düşer
     except KeyboardInterrupt:
         print("Program manuel olarak durduruldu.")
     except Exception as e:
         print("Ana döngüde hata:", e)
-
-
 
 if __name__ == "__main__":
     main()
