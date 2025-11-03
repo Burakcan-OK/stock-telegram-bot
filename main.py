@@ -160,18 +160,6 @@ def analyze_once():
         if c in df.columns:
             df[c] = pd.to_numeric(df[c], errors="coerce")
 
-    # --- RSI special score (kısmi) ---
-    rsi = df["RSI"]
-    # avoid warnings for all-NaN
-    rsi_score = -((rsi - 60.0).abs() / 60.0)
-    rsi_bonus = np.select(
-        [rsi.between(50, 70, inclusive="both"), rsi.between(70, 80, inclusive="left"), rsi > 80],
-        [0.6, 0.2, -0.3],
-        default=-0.1,
-    )
-    df["rsi_score"] = rsi_score + rsi_bonus
-
-
     # Balanced and RSI weighted
     df["BalancedScore"] = df["RSI"].fillna(0) * 0.25 + df["OsRating_1D"].fillna(0) * 0.25 + df["TechRating_1D"].fillna(0) * 0.25 + df["MARating_1D"].fillna(0) * 0.25
     df["RSIWeightedScore"] = df["RSI"].fillna(0) * 0.6 + df["OsRating_1D"].fillna(0) * 0.1333 + df["TechRating_1D"].fillna(0) * 0.1333 + df["MARating_1D"].fillna(0) * 0.1333
@@ -262,10 +250,10 @@ def analyze_once():
             for i, r in df_top.iterrows():
                 sym = r["symbol"]
                 bal = f"{r['BalancedScore']:.2f}" if pd.notna(r.get("BalancedScore")) else "-"
-                price = f"{r['current_price']:.4f}" if pd.notna(r.get("current_price")) else "-"
+                price = f"{r['current_price']:.2f}" if pd.notna(r.get("current_price")) else "-"
                 # target col name consistent
                 tp_field = f"target_price_{model.lower()}"
-                tp = f"{r.get(tp_field):.4f}" if pd.notna(r.get(tp_field)) else "-"
+                tp = f"{r.get(tp_field):.2f}" if pd.notna(r.get(tp_field)) else "-"
                 exp_field = f"expected_change_{model.lower()}"
                 exp = r.get(exp_field, "-")
                 msg += f"{sym} | Price:{price} | Target:{tp} | Δ:{exp}\n"
@@ -350,8 +338,8 @@ def create_price_checker(monitored_dict):
                 if tp is not None and not meta["alerts"].get(mkey, False) and latest >= tp:
                     send_telegram_message(
                         f"🚨 {sym} {label} hedefe ulaştı!\n"
-                        f"Şu an: {latest:.4f} ₺ (baseline: {baseline:.4f})\n"
-                        f"Hedef: {tp:.4f} ₺"
+                        f"Şu an: {latest:.2f} ₺ \n başlangıç: {baseline:.2f}\n"
+                        f"Hedef: {tp:.2f} ₺"
                     )
                     meta["alerts"][mkey] = True
 
@@ -361,16 +349,16 @@ def create_price_checker(monitored_dict):
                 last_up = meta.get("last_threshold_up", 0)
                 if steps_up > last_up:
                     send_telegram_message(
-                        f"📈 {sym} yükseliş: +{pct_up:.2f}% "
-                        f"(baseline {baseline:.4f} → {latest:.4f})"
+                        f"📈 {sym} yükseliş: +{pct_up:.2f}% \n"
+                        f" Başlangıç {baseline:.2f} → Son fiyat {latest:.2f})"
                     )
                     meta["last_threshold_up"] = steps_up
 
             # 📉 Düşüş (dinamik referans fiyatına göre)
             elif pct_down <= -MOVEMENT_NOTIFY_DWN:
                 send_telegram_message(
-                    f"📉 {sym} düşüş: {pct_down:.2f}% "
-                    f"(baseline {baseline:.4f} → latest reference {ref_price:.4f} → price {latest:.4f})"
+                    f"📉 {sym} düşüş: {pct_down:.2f}% \n"
+                    f" Başlangıç {baseline:.2f} →\n Bir önceki yükseliş {ref_price:.2f} → Son fiyat {latest:.2f})"
                 )
                 # Yeni referans noktası düşüş sonrası fiyat olsun
                 meta["current_ref_price"] = latest
@@ -380,7 +368,7 @@ def create_price_checker(monitored_dict):
 
 
             print(
-                f"  {sym}: ref={baseline:.4f} → latest={latest:.4f}, "
+                f"  {sym}: ref={baseline:.2f} → latest={latest:.2f}, "
                 f"up_pct={pct_up:.2f}%, down_pct={pct_down:.2f}%, "
                 f"alerts={meta['alerts']}, "
                 f"up_steps={meta.get('last_threshold_up',0)}, "
