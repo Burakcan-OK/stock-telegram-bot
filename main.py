@@ -21,7 +21,7 @@ CHAT_ID = os.getenv("CHAT_ID", )
 # Hareket bildirimi eşiği (örnek: 1.0 => %1)
 MOVEMENT_NOTIFY_DWN = float(os.environ.get("MOVEMENT_NOTIFY_DWN", 1))
 MOVEMENT_NOTIFY_UP = float(os.environ.get("MOVEMENT_NOTIFY_UP", 2.5))
-
+STOP_LOSS_PCT = float(os.environ.get("STOP_LOSS_PCT", -3.5)) # %3.5 stop loss
 # Periyodik kontrol aralığı (dakika)
 CHECK_INTERVAL_MINUTES = int(os.environ.get("CHECK_INTERVAL_MINUTES", 1))
 
@@ -309,27 +309,23 @@ def create_price_checker(monitored_dict):
                 print(f"  {sym}: fiyat alınamadı.")
                 continue
 
-            # --- Dinamik baseline mantığı ---
-            # Eğer daha önce izlenmiş bir fiyat varsa onu referans al, yoksa ilk baseline ile başla
+            # --- Dinamik referans ayarı ---
             if "current_ref_price" not in meta or meta["current_ref_price"] is None:
                 meta["current_ref_price"] = meta.get("baseline_price")
 
             baseline = meta.get("baseline_price")
-            if baseline is None:
-                print(f"  {sym}: baseline yok, atlandı.")
+            ref_price = meta["current_ref_price"]
+
+            if baseline is None or ref_price is None:
+                print(f"  {sym}: baseline/ref eksik, atlandı.")
                 continue
 
-            # yüzde değişim (yükselişler baseline'a göre)
+            # --- Yüzde değişimler ---
             pct_up = (latest - baseline) / baseline * 100.0
-
-            # Eğer son fiyat (ref) yoksa baseline'ı kullan
-            if "current_ref_price" not in meta or meta["current_ref_price"] is None:
-                meta["current_ref_price"] = baseline
-
-            ref_price = meta["current_ref_price"]
             pct_down = (latest - ref_price) / ref_price * 100.0
+            pct_from_baseline = (latest - baseline) / baseline * 100.0
 
-            # 📌 Model bazlı hedef fiyat kontrolü
+            # --- Model bazlı hedef fiyat kontrolü ---
             for mkey, tkey, label in [
                 ("balanced", "target_price_balanced", "Balanced"),
                 ("rsi", "target_price_rsi", "RSI"),
@@ -338,44 +334,73 @@ def create_price_checker(monitored_dict):
                 if tp is not None and not meta["alerts"].get(mkey, False) and latest >= tp:
                     send_telegram_message(
                         f"🚨 {sym} {label} hedefe ulaştı!\n"
-                        f"Şu an: {latest:.2f} ₺ \n başlangıç: {baseline:.2f}\n"
+                        f"Şu an: {latest:.2f} ₺ (baseline: {baseline:.2f})\n"
                         f"Hedef: {tp:.2f} ₺"
                     )
                     meta["alerts"][mkey] = True
 
-            # 📈 Yükseliş (her zaman baseline'a göre)
-            if pct_up >= MOVEMENT_NOTIFY_UP:
+            # --- STOP-LOSS kontrolü ---
+            if pct_down <= STOP_LOSS_PCT:
+                msg = (
+                    f"🚨 {sym} STOP-LOSS TETİKLENDİ\n"
+                    f"───────────────\n"
+                    f"💰 Baseline: {baseline:.2f} ₺\n"
+                    f"📉 Önceki referans: {ref_price:.2f} ₺\n"
+                    f"📊 Son fiyat: {latest:.2f} ₺\n\n"
+                    f"% Değişim:\n"
+                    f"• Baseline’a göre: {pct_from_baseline:.2f}%\n"
+                    f"• Referansa göre: {pct_down:.2f}%\n\n"
+                    f"⚠️ Stop-loss oranı: {STOP_LOSS_PCT}% → Satış önerilir!\n"
+                    f"───────────────"
+                )
+                send_telegram_message(msg)
+                meta["current_ref_price"] = latest
+                meta["last_threshold_down"] = 0
+                continue  # düşüş sonrası diğer işlemleri atla
+
+            # --- Normal düşüş (dinamik referans fiyatına göre) ---
+            elif pct_down <= -MOVEMENT_NOTIFY_DWN:
+                msg = (
+                    f"📉 {sym} düşüş sinyali\n"
+                    f"───────────────\n"
+                    f"💰 Baseline: {baseline:.2f} ₺\n"
+                    f"📉 Önceki referans: {ref_price:.2f} ₺\n"
+                    f"📊 Son fiyat: {latest:.2f} ₺\n\n"
+                    f"% Değişim:\n"
+                    f"• Baseline’a göre: {pct_from_baseline:.2f}%\n"
+                    f"• Referansa göre: {pct_down:.2f}%\n"
+                    f"───────────────"
+                )
+                send_telegram_message(msg)
+                meta["current_ref_price"] = latest
+                meta["last_threshold_down"] = meta.get("last_threshold_down", 0) + 1
+
+            # --- Yükseliş (her zaman baseline’a göre) ---
+            elif pct_up >= MOVEMENT_NOTIFY_UP:
                 steps_up = int(pct_up // MOVEMENT_NOTIFY_UP)
                 last_up = meta.get("last_threshold_up", 0)
                 if steps_up > last_up:
-                    send_telegram_message(
-                        f"📈 {sym} yükseliş: +{pct_up:.2f}% \n"
-                        f" Başlangıç {baseline:.2f} → Son fiyat {latest:.2f})"
+                    msg = (
+                        f"📉 {sym} yükseliş sinyali\n"
+                        f"───────────────\n"
+                        f"💰 Baseline: {baseline:.2f} ₺\n"
+                        f"📊 Son fiyat: {latest:.2f} ₺\n\n"
+                        f"% Değişim:\n"
+                        f"• Baseline’a göre: {pct_up:.2f}%\n"
+                        f"───────────────"
                     )
+                    send_telegram_message(msg)
                     meta["last_threshold_up"] = steps_up
 
-            # 📉 Düşüş (dinamik referans fiyatına göre)
-            elif pct_down <= -MOVEMENT_NOTIFY_DWN:
-                send_telegram_message(
-                    f"📉 {sym} düşüş: {pct_down:.2f}% \n"
-                    f" Başlangıç {baseline:.2f} →\n Bir önceki yükseliş {ref_price:.2f} → Son fiyat {latest:.2f})"
-                )
-                # Yeni referans noktası düşüş sonrası fiyat olsun
-                meta["current_ref_price"] = latest
-                # Kademeleri sıfırla
-                meta["last_threshold_down"] = 0
-                meta["last_threshold_up"] = meta.get("last_threshold_up", 0)
-
-
+            # --- Terminal log ---
             print(
-                f"  {sym}: ref={baseline:.2f} → latest={latest:.2f}, "
-                f"up_pct={pct_up:.2f}%, down_pct={pct_down:.2f}%, "
-                f"alerts={meta['alerts']}, "
-                f"up_steps={meta.get('last_threshold_up',0)}, "
-                f"down_steps={meta.get('last_threshold_down',0)}"
+                f"  {sym}: baseline={baseline:.2f}, ref={ref_price:.2f}, "
+                f"latest={latest:.2f}, up={pct_up:.2f}%, down={pct_down:.2f}%, "
+                f"alerts={meta['alerts']}"
             )
 
         print("✅ Kontrol tamamlandı.")
+
     return check_prices
 
 
