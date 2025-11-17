@@ -328,16 +328,24 @@ def create_price_checker(monitored_dict):
             # continue YOK → diğer kontroller çalışacak
             # -------------------------------------
             if pct_down <= STOP_LOSS_PCT:
-                send_telegram_message(
-                    f"🚨 {sym} STOP-LOSS\n"
-                    f"────────────────\n"
-                    f"📆 {now.strftime('%Y-%m-%d %H:%M')}\n"
-                    f"💰 Baseline: {baseline:.2f} ₺\n"
-                    f"📉 Son fiyat: {latest:.2f} ₺\n"
-                    f"🔻 Değişim: {pct_down:.2f}%\n"
-                    f"⚠️ Stop-loss oranı: {STOP_LOSS_PCT}%"
-                )
+                stop_steps = int(abs(pct_down) // abs(STOP_LOSS_PCT))
+                last_steps = meta.get("stop_loss_steps", 0)
 
+                if stop_steps > last_steps:
+                    send_telegram_message(
+                        f"🚨 {sym} STOP-LOSS ({stop_steps}. kademe)\n"
+                        f"────────────────\n"
+                        f"📆 {now.strftime('%Y-%m-%d %H:%M')}\n"
+                        f"💰 Baseline: {baseline:.2f} ₺\n"
+                        f"📉 Son fiyat: {latest:.2f} ₺\n"
+                        f"🔻 Değişim: {pct_down:.2f}%\n"
+                        f"⚠️ Stop-loss: {STOP_LOSS_PCT}% x {stop_steps}"
+                    )
+                    meta["stop_loss_steps"] = stop_steps
+
+            else:
+                # stop-loss seviyesinden yukarı çıkıldıysa resetle
+                meta["stop_loss_steps"] = 0
             # -------------------------------------
             # 🟩 BASELINE YÜKSELİŞ
             # -------------------------------------
